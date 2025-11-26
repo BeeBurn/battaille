@@ -122,8 +122,8 @@ class BattleshipGame:
         self.root.resizable(False, False)
         
         # Configuration du jeu
-        self.board_size = 10
-        self.cell_size = 40
+        self.board_size = 12  # Plus petit pour s'adapter à l'écran
+        self.cell_size = 28   # Cases plus petites
         self.ship_sizes = [
             ("Porte-avions", 5),
             ("Croiseur", 4),
@@ -143,15 +143,27 @@ class BattleshipGame:
         self.current_ship_index = 0
         self.ship_horizontal = True
         
+        # Navires coulés
+        self.sunk_ships_player = []      # Navires du joueur coulés
+        self.sunk_ships_computer = []    # Navires de l'ordinateur coulés
+
+        # Utilisations de l'attaque spéciale
+        self.airstrike_uses = 3
+        self.airstrike_enabled = True
+        
         # Interface
         self.setup_ui()
         
+        # Mode bombardement
+        self.bombardment_mode = False  # Permet les tirs normaux même si reconnaissance/bombardement disponible
+    
     def setup_ui(self):
         """Configure l'interface utilisateur"""
         # Frame principal
         main_frame = tk.Frame(self.root, bg='#2C3E50')
         main_frame.pack(padx=20, pady=20)
-        
+        self.main_frame = main_frame  # Ajout pour accès ailleurs
+
         # Titre
         title = tk.Label(main_frame, text="🚢 BATAILLE NAVALE 🚢", 
                         font=('Arial', 24, 'bold'), bg='#2C3E50', fg='white')
@@ -213,9 +225,21 @@ class BattleshipGame:
         self.root.bind('r', lambda e: self.toggle_ship_orientation())
         self.root.bind('R', lambda e: self.toggle_ship_orientation())
         
+        # Ajout d'un label pour les navires coulés
+        self.sunk_label = tk.Label(main_frame, text="Navires coulés : ", font=('Arial', 12), bg='#2C3E50', fg='white')
+        self.sunk_label.grid(row=4, column=0, columnspan=3, pady=(0, 10))
+
+        # Ajout du bouton "Décollage avion"
+        self.airstrike_button = tk.Button(
+            main_frame, text="Décollage Avion (Reconnaissance & Bombardement)",
+            command=self.reconnaissance_and_bombardement,
+            font=('Arial', 12), bg='#F1C40F', fg='black', padx=10, pady=5
+        )
+        self.airstrike_button.grid(row=5, column=0, columnspan=3, pady=5)
+
         # Dessiner les grilles
         self.draw_boards()
-        
+    
     def draw_boards(self):
         """Dessine les deux grilles"""
         # Grille du joueur
@@ -316,14 +340,20 @@ class BattleshipGame:
                 self.draw_boards()
     
     def on_computer_board_click(self, event):
-        """Gère les clics sur la grille de l'ordinateur (attaques)"""
-        if not self.game_started or not self.player_turn:
-            return
-        
+        """Gère les clics sur la grille de l'ordinateur (attaques ou bombardement)"""
         col = event.x // self.cell_size
         row = event.y // self.cell_size
-        
+
         if row >= self.board_size or col >= self.board_size:
+            return
+
+        if self.bombardment_mode:
+            # Si en mode bombardement, on utilise le bombardement
+            self.bombardment_click(event)
+            return
+
+        # Tir normal
+        if not self.game_started or not self.player_turn:
             return
         
         # Vérifier si la case a déjà été attaquée
@@ -332,11 +362,32 @@ class BattleshipGame:
             return
         
         self.player_attack(row, col)
-    
+
+    def update_airstrike_button(self):
+        """Met à jour l'état du bouton d'avion selon les conditions"""
+        # Désactive si plus d'utilisations ou porte-avions coulé
+        if self.airstrike_uses <= 0 or ("Porte-avions" in self.sunk_ships_player):
+            self.airstrike_enabled = False
+            self.airstrike_button.config(state=tk.DISABLED, text="Décollage Avion (Indisponible)")
+        else:
+            self.airstrike_enabled = True
+            self.airstrike_button.config(
+                state=tk.NORMAL,
+                text=f"Décollage Avion ({self.airstrike_uses} restant{'s' if self.airstrike_uses > 1 else ''})"
+            )
+
+    def update_sunk_label(self):
+        """Met à jour l'affichage des navires coulés"""
+        player_sunk = ", ".join(self.sunk_ships_player) if self.sunk_ships_player else "Aucun"
+        computer_sunk = ", ".join(self.sunk_ships_computer) if self.sunk_ships_computer else "Aucun"
+        self.sunk_label.config(
+            text=f"Navires coulés (Vous): {computer_sunk}\nNavires coulés (Ordinateur): {player_sunk}"
+        )
+        self.update_airstrike_button()
+
     def player_attack(self, row, col):
         """Le joueur attaque"""
         result = self.computer_board.receive_attack(row, col)
-        
         if result == 'miss':
             self.info_label.config(text="Raté!")
         elif result == 'hit':
@@ -344,38 +395,31 @@ class BattleshipGame:
         elif result.startswith('sunk'):
             ship_name = result.split(':')[1]
             self.info_label.config(text=f"Coulé! {ship_name}")
-        
+            self.sunk_ships_computer.append(ship_name)
+            self.update_sunk_label()
         self.draw_boards()
-        
         if self.computer_board.all_ships_sunk():
             messagebox.showinfo("Victoire!", "Vous avez gagné! 🎉")
             self.game_started = False
             return
-        
         if result == 'miss':
             self.player_turn = False
             self.root.after(1000, self.computer_turn)
-    
+
     def computer_turn(self):
         """Tour de l'ordinateur"""
         if not self.game_started:
             return
-        
         self.info_label.config(text="L'ordinateur réfléchit...")
         self.root.update()
-        
-        # IA simple: attaque aléatoire
         attempts = 0
         while attempts < 100:
             row = random.randint(0, self.board_size - 1)
             col = random.randint(0, self.board_size - 1)
-            
             if self.player_board.grid[row][col] not in ['X', 'O']:
                 break
             attempts += 1
-        
         result = self.player_board.receive_attack(row, col)
-        
         if result == 'miss':
             self.info_label.config(text=f"L'ordinateur a raté en ({row}, {col})")
         elif result == 'hit':
@@ -383,21 +427,19 @@ class BattleshipGame:
         elif result.startswith('sunk'):
             ship_name = result.split(':')[1]
             self.info_label.config(text=f"L'ordinateur a coulé votre {ship_name}!")
-        
+            self.sunk_ships_player.append(ship_name)
+            self.update_sunk_label()
         self.draw_boards()
-        
         if self.player_board.all_ships_sunk():
             messagebox.showinfo("Défaite", "L'ordinateur a gagné!")
             self.game_started = False
             return
-        
         if result == 'miss':
             self.player_turn = True
             self.info_label.config(text="À votre tour!")
         else:
-            # L'ordinateur rejoue s'il touche
             self.root.after(1000, self.computer_turn)
-    
+
     def toggle_ship_orientation(self):
         """Change l'orientation du navire à placer"""
         if self.placing_ships and not self.game_started:
@@ -440,10 +482,86 @@ class BattleshipGame:
         self.placing_ships = True
         self.current_ship_index = 0
         self.ship_horizontal = True
+        self.sunk_ships_player = []
+        self.sunk_ships_computer = []
+        self.airstrike_uses = 3
+        self.airstrike_enabled = True
+        self.bombardment_mode = False
         self.rotate_button.config(state=tk.NORMAL)
         self.start_button.config(state=tk.NORMAL)
         self.info_label.config(text="Placez vos navires (Clic pour placer, R pour rotation)")
+        self.update_sunk_label()
         self.draw_boards()
+
+    def reconnaissance_and_bombardement(self):
+        """
+        Fonction spéciale : décollage d'avion de reconnaissance et bombardement.
+        - Révèle 3 cases aléatoires sur la grille ennemie (reconnaissance).
+        - Bombarde une case choisie par le joueur (attaque puissante).
+        """
+        if not self.game_started or not self.player_turn or not self.airstrike_enabled:
+            self.info_label.config(text="Action impossible maintenant.")
+            return
+        self.airstrike_uses -= 1
+        self.update_airstrike_button()
+        # Reconnaissance : révéler 3 cases aléatoires non attaquées
+        revealed = []
+        attempts = 0
+        while len(revealed) < 3 and attempts < 100:
+            row = random.randint(0, self.board_size - 1)
+            col = random.randint(0, self.board_size - 1)
+            cell = self.computer_board.grid[row][col]
+            if cell not in ['X', 'O'] and (row, col) not in revealed:
+                revealed.append((row, col))
+            attempts += 1
+        for row, col in revealed:
+            cell = self.computer_board.grid[row][col]
+            if cell == 'S':
+                self.computer_canvas.create_rectangle(
+                    col * self.cell_size, row * self.cell_size,
+                    (col + 1) * self.cell_size, (row + 1) * self.cell_size,
+                    outline='#FFD700', width=4
+                )
+            else:
+                self.computer_canvas.create_rectangle(
+                    col * self.cell_size, row * self.cell_size,
+                    (col + 1) * self.cell_size, (row + 1) * self.cell_size,
+                    outline='#00BFFF', width=4
+                )
+        self.info_label.config(text="Reconnaissance : 3 cases révélées. Cliquez sur une case pour bombarder OU effectuez un tir normal.")
+        self.bombardment_mode = True  # Active le mode bombardement en bonus
+
+    def bombardment_click(self, event):
+        """Gère le bombardement sur la grille ennemie après reconnaissance"""
+        col = event.x // self.cell_size
+        row = event.y // self.cell_size
+        if row >= self.board_size or col >= self.board_size:
+            self.info_label.config(text="Case hors grille.")
+            self.bombardment_mode = False
+            return
+        cell = self.computer_board.grid[row][col]
+        if cell in ['X', 'O']:
+            self.info_label.config(text="Case déjà attaquée!")
+            self.bombardment_mode = False
+            return
+        result = self.computer_board.receive_attack(row, col)
+        if result == 'miss':
+            self.info_label.config(text="Bombardement raté!")
+        elif result == 'hit':
+            self.info_label.config(text="Bombardement réussi! Navire touché!")
+        elif result.startswith('sunk'):
+            ship_name = result.split(':')[1]
+            self.info_label.config(text=f"Bombardement : {ship_name} coulé!")
+            self.sunk_ships_computer.append(ship_name)
+            self.update_sunk_label()
+        self.draw_boards()
+        self.bombardment_mode = False
+        if self.computer_board.all_ships_sunk():
+            messagebox.showinfo("Victoire!", "Vous avez gagné! 🎉")
+            self.game_started = False
+            return
+        self.player_turn = False
+        self.root.after(1000, self.computer_turn)
 
 
 def main():
